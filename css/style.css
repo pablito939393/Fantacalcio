@@ -1,0 +1,7 @@
+body { font-family: sans-serif; padding:20px; }
+.hidden { display:none; }
+header h1 { text-align:center; }
+input, select, button { margin:5px; padding:8px; font-size:1rem; }
+table { width:100%; border-collapse:collapse; margin-top:10px; }
+th,td { border:1px solid #ccc; padding:8px; text-align:center; }
+#chatMessages { height:200px; overflow-y:auto; border:1px solid #ccc; padding:8px; }
