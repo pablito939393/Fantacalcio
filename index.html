@@ -81,12 +81,13 @@
   </main>
 
   <script type="module">
-    // 1. Config Firebase
+    // Import Firebase SDK
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.5.2/firebase-app.js";
     import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.5.2/firebase-auth.js";
     import { getDatabase, ref, set, onValue, update, push, remove } from "https://www.gstatic.com/firebasejs/10.5.2/firebase-database.js";
 
-    const cfg = {
+    // Firebase configuration
+    const firebaseConfig = {
       apiKey: "AIzaSyCQyptj9TKJWtb2R1v81I_w4M8KdhlDbDM",
       authDomain: "astafantacalcio-387cf.firebaseapp.com",
       databaseURL: "https://astafantacalcio-387cf-default-rtdb.europe-west1.firebasedatabase.app",
@@ -95,164 +96,219 @@
       messagingSenderId: "826628958189",
       appId: "1:826628958189:web:dd741f447550d3259769e4"
     };
-    const app = initializeApp(cfg);
+
+    // Initialize Firebase
+    const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);
     const db   = getDatabase(app);
 
-    // 2. Elementi DOM
-    const loginSec     = document.getElementById("login");
-    const auctionSec   = document.getElementById("auction");
-    const dashboardSec = document.getElementById("dashboard");
-    const adminSec     = document.getElementById("admin");
-    const btnLogin     = document.getElementById("btnLogin");
+    // DOM Elements
+    const loginSection   = document.getElementById("login");
+    const auctionSection = document.getElementById("auction");
+    const dashboardSection = document.getElementById("dashboard");
+    const adminSection   = document.getElementById("admin");
+    const btnLogin       = document.getElementById("btnLogin");
 
-    // helper
-    function show(sec) {
-      loginSec.classList.toggle("hidden", sec!=="login");
-      auctionSec.classList.toggle("hidden", sec!=="auction");
-      dashboardSec.classList.toggle("hidden", sec!=="dashboard");
-      adminSec.classList.toggle("hidden", sec!=="admin");
+    // Show/hide sections
+    function showSection(name) {
+      loginSection.classList.toggle("hidden", name!=="login");
+      auctionSection.classList.toggle("hidden", name!=="auction");
+      dashboardSection.classList.toggle("hidden", name!=="dashboard");
+      adminSection.classList.toggle("hidden", name!=="admin");
     }
 
-    // 3. Autenticazione
+    // Authentication
     btnLogin.onclick = () => {
-      const nick = document.getElementById("nickname").value.trim();
-      const team = document.getElementById("teamName").value.trim();
-      if (!nick||!team) { alert("Inserisci nickname e squadra"); return; }
       signInAnonymously(auth);
     };
-    onAuthStateChanged(auth, user => {
+    onAuthStateChanged(auth, async user => {
       if (!user) return;
-      set(ref(db, `users/${user.uid}`), {
-        teamName: document.getElementById("teamName").value.trim(),
-        nickname: document.getElementById("nickname").value.trim(),
+      // Register user in DB
+      const nick = document.getElementById("nickname").value.trim();
+      const team = document.getElementById("teamName").value.trim();
+      await set(ref(db, `users/${user.uid}`), {
+        nickname: nick,
+        teamName: team,
         budget: 1500,
         roster: { P:[],D:[],C:[],A:[] }
-      }).then(() => {
-        loadPlayers().then(() => { bindAuction(); bindChat(); bindExport(); });
-        bindTeamsStatus();
-        show("auction");
       });
+      // Initialize modules
+      initAuction();
+      initChat();
+      initExport();
+      bindTeamsStatus();
+      showSection("auction");
     });
 
-    // 4. Auction
-    let playersByRole={P:[],D:[],C:[],A:[]}, current=null;
-    const roleSel   = document.getElementById("roleSelect");
-    const nameEl    = document.getElementById("playerName");
-    const quotaEl   = document.getElementById("playerQuota");
-    const histList  = document.getElementById("historyList");
-    const lastBid   = document.getElementById("lastBidder");
+    // Auction module
+    let playersByRole = { P:[], D:[], C:[], A:[] };
+    let currentPlayer = null;
+    const roleSelect   = document.getElementById("roleSelect");
+    const playerNameEl = document.getElementById("playerName");
+    const playerQuotaEl= document.getElementById("playerQuota");
+    const historyList  = document.getElementById("historyList");
+    const lastBidderEl = document.getElementById("lastBidder");
 
     async function loadPlayers() {
-      const txt = await (await fetch("data/players.csv")).text();
-      const [hdr,...rows] = txt.trim().split("\n").map(r=>r.split(","));
-      const idx = {Id:hdr.indexOf("Id"),R:hdr.indexOf("R"),Nome:hdr.indexOf("Nome"),Squ:hdr.indexOf("Squadra"),Q:hdr.indexOf("QuotaIniziale")};
-      rows.forEach(c=>{
-        const rec={id:c[idx.Id],role:c[idx.R],nome:c[idx.Nome],squadra:c[idx.Squ],quota:+c[idx.Q]};
+      const resp = await fetch("data/players.csv");
+      const text = await resp.text();
+      const lines = text.trim().split("\n");
+      const headers = lines[0].split(",");
+      const idx = {
+        Id: headers.indexOf("Id"),
+        R: headers.indexOf("R"),
+        Nome: headers.indexOf("Nome"),
+        Squadra: headers.indexOf("Squadra"),
+        Quota: headers.indexOf("QuotaIniziale")
+      };
+      lines.slice(1).forEach(row => {
+        const cols = row.split(",");
+        const rec = {
+          id: cols[idx.Id],
+          role: cols[idx.R],
+          nome: cols[idx.Nome],
+          squadra: cols[idx.Squadra],
+          quota: Number(cols[idx.Quota])
+        };
         playersByRole[rec.role].push(rec);
       });
     }
-    function bindAuction(){
-      document.getElementById("btnNext").onclick   = nextP;
-      document.getElementById("btnAssign").onclick = assignP;
-      document.getElementById("btnDiscard").onclick= discardP;
-      document.querySelectorAll(".bid-btn").forEach(b=>b.onclick=()=>bid(+b.dataset.incr));
-    }
-    function nextP(){
-      const list=playersByRole[roleSel.value];
-      if(!list.length){alert("Finiti!");return;}
-      current=list.splice(Math.random()*list.length|0,1)[0];
-      nameEl.textContent=`${current.nome} (${current.squadra})`;
-      quotaEl.textContent=`Base: ${current.quota}`;
-      histList.innerHTML=""; lastBid.textContent="";
-    }
-    function bid(incr){
-      if(!current) return;
-      current.quota+=incr;
-      push(ref(db,`bids/${current.id}`),{team:document.getElementById("teamName").value,amount:current.quota,ts:Date.now()})
-        .then(refreshHist);
-    }
-    function refreshHist(){
-      onValue(ref(db,`bids/${current.id}`),s=>{
-        const a=Object.values(s.val()||{}).sort((x,y)=>y.ts-x.ts).slice(0,5);
-        histList.innerHTML=a.map(o=>`<li>${o.team}: ${o.amount}</li>`).join("");
-        lastBid.textContent=a[0]?`Ultima offerta: ${a[0].team} – ${a[0].amount}`:"";
-      });
-    }
-    function assignP(){
-      if(!current) return;
-      onValue(ref(db,`bids/${current.id}`),s=>{
-        const bids=Object.values(s.val()||{});
-        if(!bids.length){alert("No offerte");return;}
-        const w=bids.sort((x,y)=>y.amount-x.amount)[0];
-        onValue(ref(db,"users"),us=>{
-          const u=Object.entries(us.val()||{}).find(([k,v])=>v.teamName===w.team);
-          if(!u){alert("User no");return;}
-          const uid=u[0],data=u[1];
-          push(ref(db,`users/${uid}/roster/${current.role}`),{id:current.id,nome:current.nome,quota:w.amount});
-          update(ref(db,`users/${uid}`),{budget:data.budget-w.amount})
-            .then(()=>{updateTeamsStatus();nextP();});
-        },{onlyOnce:true});
-      },{onlyOnce:true});
-    }
-    function discardP(){
-      if(!current) return;
-      push(ref(db,`discarded/${current.role}`),current.id).then(nextP);
+
+    function bindAuction() {
+      document.getElementById("btnNext").onclick = pickNextPlayer;
+      document.getElementById("btnAssign").onclick = assignPlayer;
+      document.getElementById("btnDiscard").onclick = discardPlayer;
+      document.querySelectorAll(".bid-btn").forEach(btn =>
+        btn.onclick = () => placeBid(+btn.dataset.incr)
+      );
     }
 
-    // 5. Teams status
-    function bindTeamsStatus(){
-      onValue(ref(db,"users"),s=>{
-        const t=document.querySelector("#statusTable tbody");
-        t.innerHTML=Object.values(s.val()||{}).map(u=>`<tr><td>${u.teamName}</td><td>${u.budget}</td></tr>`).join("");
+    async function initAuction() {
+      await loadPlayers();
+      bindAuction();
+    }
+
+    function pickNextPlayer() {
+      const list = playersByRole[roleSelect.value];
+      if (!list || !list.length) { alert("Nessun giocatore rimasto"); return; }
+      currentPlayer = list.splice(Math.floor(Math.random()*list.length),1)[0];
+      playerNameEl.textContent = `${currentPlayer.nome} (${currentPlayer.squadra})`;
+      playerQuotaEl.textContent = `Base: ${currentPlayer.quota}`;
+      historyList.innerHTML = "";
+      lastBidderEl.textContent = "";
+    }
+
+    function placeBid(incr) {
+      if (!currentPlayer) return;
+      currentPlayer.quota += incr;
+      push(ref(db, `bids/${currentPlayer.id}`), {
+        team: document.getElementById("teamName").value,
+        amount: currentPlayer.quota,
+        ts: Date.now()
+      }).then(refreshHistory);
+    }
+
+    function refreshHistory() {
+      onValue(ref(db, `bids/${currentPlayer.id}`), snap => {
+        const arr = Object.values(snap.val()||{}).sort((a,b)=>b.ts-a.ts).slice(0,5);
+        historyList.innerHTML = arr.map(b => `<li>${b.team}: ${b.amount}</li>`).join("");
+        lastBidderEl.textContent = arr[0] ? `Ultima offerta: ${arr[0].team} – ${arr[0].amount}` : "";
       });
     }
-    function updateTeamsStatus(){ bindTeamsStatus(); }
 
-    // 6. Chat
-    function bindChat(){
-      const inpt=document.getElementById("chatInput"),box=document.getElementById("chatMessages");
-      document.getElementById("btnSend").onclick=()=>{
-        const m=inpt.value.trim(); if(!m)return;
-        push(ref(db,"chat"),{team:document.getElementById("teamName").value,text:m,ts:Date.now()});
-        inpt.value="";
+    function assignPlayer() {
+      if (!currentPlayer) return;
+      onValue(ref(db, `bids/${currentPlayer.id}`), snap => {
+        const bids = Object.values(snap.val()||{});
+        if (!bids.length) { alert("Nessuna offerta"); return; }
+        const winner = bids.sort((a,b)=>b.amount-a.amount)[0];
+        onValue(ref(db, "users"), userSnap => {
+          const users = userSnap.val()||{};
+          const uid = Object.keys(users).find(k=>users[k].teamName===winner.team);
+          if (!uid) { alert("Utente non trovato"); return; }
+          push(ref(db, `users/${uid}/roster/${currentPlayer.role}`), {
+            id: currentPlayer.id,
+            nome: currentPlayer.nome,
+            squadra: currentPlayer.squadra,
+            quota: winner.amount
+          });
+          update(ref(db, `users/${uid}`), { budget: users[uid].budget - winner.amount })
+            .then(() => { bindTeamsStatus(); pickNextPlayer(); });
+        }, { onlyOnce: true });
+      }, { onlyOnce: true });
+    }
+
+    function discardPlayer() {
+      if (!currentPlayer) return;
+      push(ref(db, `discarded/${currentPlayer.role}`), currentPlayer.id)
+        .then(pickNextPlayer);
+    }
+
+    // Teams status
+    function bindTeamsStatus() {
+      onValue(ref(db, "users"), snap => {
+        const tbody = document.querySelector("#statusTable tbody");
+        const users = snap.val()||{};
+        tbody.innerHTML = Object.values(users)
+          .map(u=>`<tr><td>${u.teamName}</td><td>${u.budget}</td></tr>`)
+          .join("");
+      });
+    }
+
+    // Chat module
+    function initChat() {
+      const chatInput = document.getElementById("chatInput");
+      const chatBox = document.getElementById("chatMessages");
+      document.getElementById("btnSend").onclick = () => {
+        const text = chatInput.value.trim();
+        if (!text) return;
+        push(ref(db, "chat"), {
+          team: document.getElementById("teamName").value,
+          text,
+          ts: Date.now()
+        });
+        chatInput.value = "";
       };
-      onValue(ref(db,"chat"),s=>{
-        const msgs=Object.values(s.val()||{}).sort((a,b)=>a.ts-b.ts);
-        box.innerHTML=msgs.map(m=>`<p><strong>${m.team}:</strong> ${m.text}</p>`).join("");
-        box.scrollTop=box.scrollHeight;
+      onValue(ref(db, "chat"), snap => {
+        const msgs = Object.values(snap.val()||{}).sort((a,b)=>a.ts-b.ts);
+        chatBox.innerHTML = msgs.map(m => `<p><strong>${m.team}:</strong> ${m.text}</p>`).join("");
+        chatBox.scrollTop = chatBox.scrollHeight;
       });
     }
 
-    // 7. Export rosters
-    function bindExport(){
-      document.getElementById("btnExport").onclick=()=>{
-        onValue(ref(db,"users"),s=>{
-          const rows=[["Squadra","IdGiocatore","Crediti"]];
-          Object.values(s.val()||{}).forEach(u=>{
-            ["P","D","C","A"].forEach(r=>{
-              (u.roster[r]||[]).forEach(p=>rows.push([u.teamName,p.id,p.quota]));
+    // Export module
+    function initExport() {
+      document.getElementById("btnExport").onclick = () => {
+        onValue(ref(db, "users"), snap => {
+          const rows = [["Squadra","IdGiocatore","Crediti"]];
+          Object.values(snap.val()||{}).forEach(u => {
+            ["P","D","C","A"].forEach(r => {
+              (u.roster[r]||[]).forEach(p => rows.push([u.teamName,p.id,p.quota]));
             });
           });
-          const csv=rows.map(r=>r.join(",")).join("\n");
-          const bl=new Blob([csv],{type:"text/csv"});
-          const a=document.createElement("a");a.href=URL.createObjectURL(bl);
-          a.download="export_rosters.csv";a.click();
-        },{onlyOnce:true});
+          const csv = rows.map(r=>r.join(",")).join("\n");
+          const blob = new Blob([csv], { type:"text/csv" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = "export_rosters.csv";
+          a.click();
+        }, { onlyOnce: true });
       };
     }
 
-    // 8. Admin reset
-    document.getElementById("btnReset").onclick=()=>{
-      if(confirm("Reset?")){
-        remove(ref(db,"bids")); remove(ref(db,"users"));
-        remove(ref(db,"chat")); remove(ref(db,"discarded"));
-        show("login");
+    // Admin reset
+    document.getElementById("btnReset").onclick = () => {
+      if (confirm("Confermi reset asta?")) {
+        remove(ref(db, "bids"));
+        remove(ref(db, "users"));
+        remove(ref(db, "chat"));
+        remove(ref(db, "discarded"));
+        showSection("login");
       }
     };
 
-    // Inizia mostrando login
-    show("login");
+    // Start at login
+    showSection("login");
   </script>
 </body>
 </html>
